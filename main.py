@@ -3,10 +3,10 @@ import json
 import re
 import time
 import datetime
-import logging
+import asyncio
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register, StarTools
-from astrbot.api import AstrBotConfig
+from astrbot.api import AstrBotConfig, logger
 from pathlib import Path
 
 
@@ -19,7 +19,7 @@ class TempEmailPlugin(Star):
         # 安全的API密钥配置检查
         self.api_key = config.get("api_key")
         if not self.api_key:
-            logging.error("临时邮箱插件：api_key 未在配置中设置，插件无法工作。")
+            logger.error("临时邮箱插件：api_key 未在配置中设置，插件无法工作。")
             raise ValueError("TempEmailPlugin: api_key is not configured. Please set api_key in the plugin configuration.")
         
         # 直接在代码中设置默认的API地址和邮箱类型
@@ -32,6 +32,10 @@ class TempEmailPlugin(Star):
         self.data_dir = StarTools.get_data_dir()
         self.user_data_file = self.data_dir / "user_data.json"
         self._load_user_data()
+        
+        # 并发安全：为每个用户创建锁
+        self.user_locks = {}
+        self.global_lock = asyncio.Lock()
 
     def _clean_email_content(self, content: str) -> str:
         """清理邮件内容，移除不必要的格式代码"""
@@ -63,6 +67,13 @@ class TempEmailPlugin(Star):
         
         return content
 
+    async def _get_user_lock(self, user_origin: str) -> asyncio.Lock:
+        """获取指定用户的锁，如果不存在则创建"""
+        async with self.global_lock:
+            if user_origin not in self.user_locks:
+                self.user_locks[user_origin] = asyncio.Lock()
+            return self.user_locks[user_origin]
+
     def _load_user_data(self):
         """从文件加载用户数据"""
         if self.user_data_file.exists():
@@ -73,7 +84,7 @@ class TempEmailPlugin(Star):
                     self.user_message_ids = data.get("user_message_ids", {})
             except (json.JSONDecodeError, IOError) as e:
                 # 如果文件损坏或读取失败，初始化为空字典
-                logging.warning(f"临时邮箱插件：加载用户数据失败，将使用空数据: {e}")
+                logger.warning(f"临时邮箱插件：加载用户数据失败，将使用空数据: {e}")
                 self.user_email_ids = {}
                 self.user_message_ids = {}
         else:
@@ -92,7 +103,7 @@ class TempEmailPlugin(Star):
                 json.dump(data, f, ensure_ascii=False, indent=4)
         except IOError as e:
             # 记录保存失败，但不影响程序运行
-            logging.warning(f"临时邮箱插件：保存用户数据失败: {e}")
+            logger.warning(f"临时邮箱插件：保存用户数据失败: {e}")
 
     def _timestamp_to_local_time(self, timestamp) -> str:
         """将时间戳转换为本地时间格式"""
@@ -119,7 +130,11 @@ class TempEmailPlugin(Star):
     @filter.command("获取邮箱")
     async def generate_temp_email(self, event: AstrMessageEvent):
         """生成临时邮箱地址"""
-        try:
+        user_origin = event.unified_msg_origin
+        user_lock = await self._get_user_lock(user_origin)
+        
+        async with user_lock:
+            try:
             # 调用临时邮箱API
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=65)) as session:
                 # 根据API文档，使用query string传递apikey
@@ -152,7 +167,6 @@ class TempEmailPlugin(Star):
                                 email_id = result.get("id", "") if isinstance(result, dict) else ""
                                 
                                 if email_id:
-                                    user_origin = event.unified_msg_origin
                                     self.user_email_ids[user_origin] = {
                                         "email_id": email_id,
                                         "email_address": email,
@@ -170,37 +184,40 @@ class TempEmailPlugin(Star):
                                 yield event.plain_result("❌ 生成邮箱失败，请稍后重试")
                                 
                         except json.JSONDecodeError as e:
-                            logging.error(f"临时邮箱插件：生成邮箱API返回JSON格式无效: {e}")
+                            logger.error(f"临时邮箱插件：生成邮箱API返回JSON格式无效: {e}")
                             yield event.plain_result("❌ API返回的JSON格式无效")
                     else:
-                        logging.error(f"临时邮箱插件：生成邮箱网络请求失败，状态码: {response.status}")
+                        logger.error(f"临时邮箱插件：生成邮箱网络请求失败，状态码: {response.status}")
                         yield event.plain_result("❌ 网络请求失败")
                         
-        except Exception as e:
-            logging.error(f"临时邮箱插件：生成临时邮箱时发生错误: {e}")
-            yield event.plain_result("❌ 生成临时邮箱时发生错误")
+            except Exception as e:
+                logger.error(f"临时邮箱插件：生成临时邮箱时发生错误: {e}")
+                yield event.plain_result("❌ 生成临时邮箱时发生错误")
 
     @filter.command("邮箱列表")
     async def get_email_messages(self, event: AstrMessageEvent):
         """获取指定邮箱的邮件列表"""
-        # 从消息中解析邮箱ID参数
-        message_text = event.message_str.strip()
-        parts = message_text.split()
+        user_origin = event.unified_msg_origin
+        user_lock = await self._get_user_lock(user_origin)
         
-        email_id = None
-        if len(parts) > 1:
-            # 如果有参数，使用参数作为邮箱ID
-            email_id = parts[1].strip()
-        
-        if not email_id:
-            # 如果没有参数，尝试使用用户存储的邮箱ID
-            user_origin = event.unified_msg_origin
-            if user_origin in self.user_email_ids:
-                email_id = self.user_email_ids[user_origin]["email_id"]
-            else:
-                yield event.plain_result("❌ 未找到您的邮箱信息，请先使用 获取邮箱 生成邮箱，或手动指定邮箱ID\n\n使用方法: 邮箱列表 <邮箱ID>")
-                return
-        try:
+        async with user_lock:
+            # 从消息中解析邮箱ID参数
+            message_text = event.message_str.strip()
+            parts = message_text.split()
+            
+            email_id = None
+            if len(parts) > 1:
+                # 如果有参数，使用参数作为邮箱ID
+                email_id = parts[1].strip()
+            
+            if not email_id:
+                # 如果没有参数，尝试使用用户存储的邮箱ID
+                if user_origin in self.user_email_ids:
+                    email_id = self.user_email_ids[user_origin]["email_id"]
+                else:
+                    yield event.plain_result("❌ 未找到您的邮箱信息，请先使用 获取邮箱 生成邮箱，或手动指定邮箱ID\n\n使用方法: 邮箱列表 <邮箱ID>")
+                    return
+            try:
             
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=65)) as session:
                 headers = {
@@ -229,7 +246,6 @@ class TempEmailPlugin(Star):
                             
                             if messages and len(messages) > 0:
                                 # 缓存用户的邮件ID列表
-                                user_origin = event.unified_msg_origin
                                 message_ids = [msg.get("id", "") for msg in messages if msg.get("id")]
                                 self.user_message_ids[user_origin] = message_ids
                                 self._save_user_data()
@@ -260,7 +276,7 @@ class TempEmailPlugin(Star):
                                 
                         except json.JSONDecodeError as e:
                             logging.error(f"临时邮箱插件：邮件列表API返回JSON格式无效: {e}")
-                            yield event.plain_result(f"❌ 邮件列表API返回的JSON格式无效: {e}")
+                            yield event.plain_result("❌ 获取邮件列表失败，API响应格式错误。")
                     else:
                         response_text = await response.text()
                         logging.error(f"临时邮箱插件：获取邮件列表网络请求失败，状态码: {response.status}")
@@ -336,7 +352,7 @@ class TempEmailPlugin(Star):
                                 
                         except json.JSONDecodeError as e:
                             logging.error(f"临时邮箱插件：邮件详情API返回JSON格式无效: {e}")
-                            yield event.plain_result(f"❌ 邮件详情API返回的JSON格式无效: {e}")
+                            yield event.plain_result("❌ 获取邮件详情失败，API响应格式错误。")
                     else:
                         response_text = await response.text()
                         logging.error(f"临时邮箱插件：获取邮件详情网络请求失败，状态码: {response.status}")
