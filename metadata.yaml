@@ -1,5 +1,5 @@
 name: astrbot_plugin_temp-email # 这是你的插件的唯一识别名。
-desc: 临时邮箱生成插件 # 插件简短描述
+desc: 获取临时邮箱 # 插件简短描述
 help: 使用 邮箱帮助 命令获取使用方法
 version: v0.0.1
 author: victical # 作者
