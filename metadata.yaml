@@ -3,4 +3,4 @@ desc: 临时邮箱生成插件 # 插件简短描述
 help: 使用 邮箱帮助 命令获取使用方法
 version: v0.0.1
 author: victical # 作者
-repo: https://github.com/victical/astrbot_plugin_temp-email # 插件的仓库地址
+repo: https://github.com/victical/astrbot_plugin_temp-email.git # 插件的仓库地址
