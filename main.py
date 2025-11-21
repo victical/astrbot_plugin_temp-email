@@ -10,7 +10,7 @@ from astrbot.api import AstrBotConfig, logger
 from pathlib import Path
 
 
-@register("temp_email", "victical", "临时邮箱生成插件", "1.0.0", "https://github.com/victical/astrbot_plugin_temp-email")
+@register("temp-email", "victical", "临时邮箱生成插件", "1.0.0", "https://github.com/victical/astrbot_plugin_temp-email")
 class TempEmailPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
