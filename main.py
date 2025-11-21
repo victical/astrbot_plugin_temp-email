@@ -228,6 +228,7 @@ class TempEmailPlugin(Star):
                 else:
                     yield event.plain_result("❌ 未找到您的邮箱信息，请先使用 获取邮箱 生成邮箱，或手动指定邮箱ID\n\n使用方法: 邮箱列表 <邮箱ID>")
                     return
+            
             try:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=65)) as session:
                     headers = {

@@ -2,7 +2,7 @@
     "api_key": {
         "description": "临时邮箱API密钥",
         "type": "string",
-        "hint": "请输入您的临时邮箱API密钥，用于访问临时邮箱服务。",
+        "hint": "获取密钥：https://www.idatariver.com/zh-cn/console/apikeys",
         "obvious_hint": true,
         "default": ""
     }
