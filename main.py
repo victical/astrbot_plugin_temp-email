@@ -10,7 +10,7 @@ from astrbot.api import AstrBotConfig, logger
 from pathlib import Path
 
 
-@register("temp-email", "victical", "临时邮箱生成插件", "0.0.2", "https://github.com/victical/astrbot_plugin_temp-email")
+@register("temp-email", "victical", "临时邮箱生成插件", "1.0.0", "https://github.com/victical/astrbot_plugin_temp-email")
 class TempEmailPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -18,9 +18,10 @@ class TempEmailPlugin(Star):
         
         # 安全的API密钥配置检查
         self.api_key = config.get("api_key")
-        if not self.api_key:
-            logger.error("临时邮箱插件：api_key 未在配置中设置，插件无法工作。")
-            raise ValueError("TempEmailPlugin: api_key is not configured. Please set api_key in the plugin configuration.")
+        self.is_configured = bool(self.api_key)
+        
+        if not self.is_configured:
+            logger.warning("临时邮箱插件：api_key 未在配置中设置，插件功能将被禁用。请在插件配置中设置API密钥后重载插件。")
         
         # 直接在代码中设置默认的API地址和邮箱类型
         self.generate_url = "https://apiok.us/api/cbea/generate/v1"
@@ -130,6 +131,11 @@ class TempEmailPlugin(Star):
     @filter.command("获取邮箱")
     async def generate_temp_email(self, event: AstrMessageEvent):
         """生成临时邮箱地址"""
+        # 检查插件是否已配置
+        if not self.is_configured:
+            yield event.plain_result("❌ 插件未配置API密钥\n\n请联系管理员在插件配置中设置 api_key 后重载插件。")
+            return
+            
         user_origin = event.unified_msg_origin
         user_lock = await self._get_user_lock(user_origin)
         
@@ -142,61 +148,66 @@ class TempEmailPlugin(Star):
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                         "Accept": "application/json"
                     }
-                
-                # 根据示例代码，添加type参数
-                params = {
-                    "apikey": self.api_key,
-                    "type": self.email_type
-                }
-                
-                async with session.get(self.generate_url, params=params, headers=headers) as response:
-                    if response.status == 200:
-                        try:
-                            data = await response.json()
-                            
-                            result = data.get("result", {})
-                            
-                            # 获取邮箱地址
-                            email = None
-                            if isinstance(result, dict):
-                                email = result.get("email") or result.get("mail") or result.get("address")
-                            elif isinstance(result, str):
-                                email = result
-                            
-                            if email:
-                                email_id = result.get("id", "") if isinstance(result, dict) else ""
+                    
+                    # 根据示例代码，添加type参数
+                    params = {
+                        "apikey": self.api_key,
+                        "type": self.email_type
+                    }
+                    
+                    async with session.get(self.generate_url, params=params, headers=headers) as response:
+                        if response.status == 200:
+                            try:
+                                data = await response.json()
                                 
-                                if email_id:
-                                    self.user_email_ids[user_origin] = {
-                                        "email_id": email_id,
-                                        "email_address": email,
-                                        "created_time": time.time()
-                                    }
-                                    self._save_user_data()
+                                result = data.get("result", {})
                                 
-                                reply_text = f"? 临时邮箱生成成功！\n\n?? 邮箱地址：{email}"
-                                if email_id:
-                                    reply_text += f"\n?? 邮箱ID：{email_id}"
-                                reply_text += f"\n\n?? 注意：此邮箱为临时邮箱，请及时使用。"
-                                reply_text += f"\n?? 使用 邮箱列表 快速查看邮件列表"
-                                yield event.plain_result(reply_text)
-                            else:
-                                yield event.plain_result("? 生成邮箱失败，请稍后重试")
+                                # 获取邮箱地址
+                                email = None
+                                if isinstance(result, dict):
+                                    email = result.get("email") or result.get("mail") or result.get("address")
+                                elif isinstance(result, str):
+                                    email = result
                                 
-                        except json.JSONDecodeError as e:
-                            logger.error(f"临时邮箱插件：生成邮箱API返回JSON格式无效: {e}")
-                            yield event.plain_result("? API返回的JSON格式无效")
-                    else:
-                        logger.error(f"临时邮箱插件：生成邮箱网络请求失败，状态码: {response.status}")
-                        yield event.plain_result("? 网络请求失败")
+                                if email:
+                                    email_id = result.get("id", "") if isinstance(result, dict) else ""
+                                    
+                                    if email_id:
+                                        self.user_email_ids[user_origin] = {
+                                            "email_id": email_id,
+                                            "email_address": email,
+                                            "created_time": time.time()
+                                        }
+                                        self._save_user_data()
+                                    
+                                    reply_text = f"✅ 临时邮箱生成成功！\n\n📧 邮箱地址：{email}"
+                                    if email_id:
+                                        reply_text += f"\n🆔 邮箱ID：{email_id}"
+                                    reply_text += f"\n\n⚠️ 注意：此邮箱为临时邮箱，请及时使用。"
+                                    reply_text += f"\n📬 使用 邮箱列表 快速查看邮件列表"
+                                    yield event.plain_result(reply_text)
+                                else:
+                                    yield event.plain_result("❌ 生成邮箱失败，请稍后重试")
+                                    
+                            except json.JSONDecodeError as e:
+                                logger.error(f"临时邮箱插件：生成邮箱API返回JSON格式无效: {e}")
+                                yield event.plain_result("❌ API返回的JSON格式无效")
+                        else:
+                            logger.error(f"临时邮箱插件：生成邮箱网络请求失败，状态码: {response.status}")
+                            yield event.plain_result("❌ 网络请求失败")
                         
             except Exception as e:
                 logger.error(f"临时邮箱插件：生成临时邮箱时发生错误: {e}")
-                yield event.plain_result("? 生成临时邮箱时发生错误")
+                yield event.plain_result("❌ 生成临时邮箱时发生错误")
 
     @filter.command("邮箱列表")
     async def get_email_messages(self, event: AstrMessageEvent):
         """获取指定邮箱的邮件列表"""
+        # 检查插件是否已配置
+        if not self.is_configured:
+            yield event.plain_result("❌ 插件未配置API密钥\n\n请联系管理员在插件配置中设置 api_key 后重载插件。")
+            return
+            
         user_origin = event.unified_msg_origin
         user_lock = await self._get_user_lock(user_origin)
         
@@ -215,80 +226,84 @@ class TempEmailPlugin(Star):
                 if user_origin in self.user_email_ids:
                     email_id = self.user_email_ids[user_origin]["email_id"]
                 else:
-                    yield event.plain_result("? 未找到您的邮箱信息，请先使用 获取邮箱 生成邮箱，或手动指定邮箱ID\n\n使用方法: 邮箱列表 <邮箱ID>")
+                    yield event.plain_result("❌ 未找到您的邮箱信息，请先使用 获取邮箱 生成邮箱，或手动指定邮箱ID\n\n使用方法: 邮箱列表 <邮箱ID>")
                     return
             try:
-            
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=65)) as session:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "application/json"
-                }
-                
-                params = {
-                    "apikey": self.api_key,
-                    "id": email_id
-                }
-                
-                async with session.get(self.messages_url, params=params, headers=headers) as response:
-                    if response.status == 200:
-                        try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=65)) as session:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "application/json"
+                    }
+                    
+                    params = {
+                        "apikey": self.api_key,
+                        "id": email_id
+                    }
+                    
+                    async with session.get(self.messages_url, params=params, headers=headers) as response:
+                        if response.status == 200:
+                            try:
+                                response_text = await response.text()
+                                
+                                data = json.loads(response_text)
+                                result = data.get("result", [])
+                                
+                                messages = []
+                                if isinstance(result, dict) and "messages" in result:
+                                    messages = result["messages"]
+                                elif isinstance(result, list):
+                                    messages = result
+                                
+                                if messages and len(messages) > 0:
+                                    # 缓存用户的邮件ID列表
+                                    message_ids = [msg.get("id", "") for msg in messages if msg.get("id")]
+                                    self.user_message_ids[user_origin] = message_ids
+                                    self._save_user_data()
+                                    
+                                    reply_text = f"📬 邮件列表 (邮箱ID: {email_id})\n\n"
+                                    display_messages = messages[:10] if len(messages) > 10 else messages
+                                    
+                                    for i, message in enumerate(display_messages, 1):
+                                        sender = message.get("from", "未知发件人")
+                                        subject = message.get("subject", "无主题")
+                                        msg_id = message.get("id", "")
+                                        msg_time = message.get("time", message.get("date", ""))
+                                        # 转换时间戳为本地时间
+                                        local_time = self._timestamp_to_local_time(msg_time)
+                                        reply_text += f"{i}. 📧 标题：{subject}\n"
+                                        reply_text += f"   👤 发件人: {sender}\n"
+                                        reply_text += f"   📅 时间: {local_time}\n"
+                                        reply_text += "\n"
+                                    
+                                    if len(messages) > 10:
+                                        reply_text += f"... 还有 {len(messages) - 10} 封邮件未显示\n\n"
+                                    
+                                    reply_text += "💡 提示: 直接输入 查看正文 即可查看最新邮件内容"
+                                else:
+                                    reply_text = f"📭 暂无邮件\n\n该邮箱(ID: {email_id})\n目前没有收到任何邮件。"
+                                
+                                yield event.plain_result(reply_text)
+                                    
+                            except json.JSONDecodeError as e:
+                                logger.error(f"临时邮箱插件：邮件列表API返回JSON格式无效: {e}")
+                                yield event.plain_result("❌ 获取邮件列表失败，API响应格式错误。")
+                        else:
                             response_text = await response.text()
-                            
-                            data = json.loads(response_text)
-                            result = data.get("result", [])
-                            
-                            messages = []
-                            if isinstance(result, dict) and "messages" in result:
-                                messages = result["messages"]
-                            elif isinstance(result, list):
-                                messages = result
-                            
-                            if messages and len(messages) > 0:
-                                # 缓存用户的邮件ID列表
-                                message_ids = [msg.get("id", "") for msg in messages if msg.get("id")]
-                                self.user_message_ids[user_origin] = message_ids
-                                self._save_user_data()
-                                
-                                reply_text = f"?? 邮件列表 (邮箱ID: {email_id})\n\n"
-                                display_messages = messages[:10] if len(messages) > 10 else messages
-                                
-                                for i, message in enumerate(display_messages, 1):
-                                    sender = message.get("from", "未知发件人")
-                                    subject = message.get("subject", "无主题")
-                                    msg_id = message.get("id", "")
-                                    msg_time = message.get("time", message.get("date", ""))
-                                    # 转换时间戳为本地时间
-                                    local_time = self._timestamp_to_local_time(msg_time)
-                                    reply_text += f"{i}. ?? 标题：{subject}\n"
-                                    reply_text += f"   ?? 发件人: {sender}\n"
-                                    reply_text += f"   ?? 时间: {local_time}\n"
-                                    reply_text += "\n"
-                                
-                                if len(messages) > 10:
-                                    reply_text += f"... 还有 {len(messages) - 10} 封邮件未显示\n\n"
-                                
-                                reply_text += "?? 提示: 直接输入 查看正文 即可查看最新邮件内容"
-                            else:
-                                reply_text = f"?? 暂无邮件\n\n该邮箱(ID: {email_id})\n目前没有收到任何邮件。"
-                            
-                            yield event.plain_result(reply_text)
-                                
-                        except json.JSONDecodeError as e:
-                            logger.error(f"临时邮箱插件：邮件列表API返回JSON格式无效: {e}")
-                            yield event.plain_result("? 获取邮件列表失败，API响应格式错误。")
-                    else:
-                        response_text = await response.text()
-                        logger.error(f"临时邮箱插件：获取邮件列表网络请求失败，状态码: {response.status}")
-                        yield event.plain_result(f"? 网络请求失败，状态码: {response.status}")
+                            logger.error(f"临时邮箱插件：获取邮件列表网络请求失败，状态码: {response.status}")
+                            yield event.plain_result(f"❌ 网络请求失败，状态码: {response.status}")
                         
             except Exception as e:
                 logger.error(f"临时邮箱插件：获取邮件列表时发生错误: {e}")
-                yield event.plain_result(f"? 获取邮件列表时发生错误: {e}")
+                yield event.plain_result(f"❌ 获取邮件列表时发生错误: {e}")
 
     @filter.command("查看正文")
     async def get_message_detail(self, event: AstrMessageEvent):
         """获取邮件详情"""
+        # 检查插件是否已配置
+        if not self.is_configured:
+            yield event.plain_result("❌ 插件未配置API密钥\n\n请联系管理员在插件配置中设置 api_key 后重载插件。")
+            return
+            
         user_origin = event.unified_msg_origin
         user_lock = await self._get_user_lock(user_origin)
         
@@ -306,64 +321,64 @@ class TempEmailPlugin(Star):
                 if user_origin in self.user_message_ids and self.user_message_ids[user_origin]:
                     message_id = self.user_message_ids[user_origin][0]  # 使用第一个（最新的）邮件ID
                 else:
-                    yield event.plain_result("? 未找到邮件ID，请先使用 邮箱列表 查看邮件，或手动指定邮件ID\n\n使用方法: 查看正文 <邮件ID>")
+                    yield event.plain_result("❌ 未找到邮件ID，请先使用 邮箱列表 查看邮件，或手动指定邮件ID\n\n使用方法: 查看正文 <邮件ID>")
                     return
             
             try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=65)) as session:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "application/json"
-                }
-                
-                params = {
-                    "apikey": self.api_key,
-                    "id": message_id
-                }
-                
-                async with session.get(self.message_detail_url, params=params, headers=headers) as response:
-                    if response.status == 200:
-                        try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=65)) as session:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "application/json"
+                    }
+                    
+                    params = {
+                        "apikey": self.api_key,
+                        "id": message_id
+                    }
+                    
+                    async with session.get(self.message_detail_url, params=params, headers=headers) as response:
+                        if response.status == 200:
+                            try:
+                                response_text = await response.text()
+                                
+                                data = json.loads(response_text)
+                                result = data.get("result", {})
+                                
+                                if result:
+                                    # 确保result是字典类型
+                                    if not isinstance(result, dict):
+                                        yield event.plain_result(f"❌ 邮件详情格式错误")
+                                        return
+                                    
+                                    sender = result.get("from", "未知发件人")
+                                    subject = result.get("subject", "无主题")
+                                    content = result.get("content", "无内容")
+                                    
+                                    cleaned_content = self._clean_email_content(content)
+                                    
+                                    reply_text = f"📧 邮件详情 (ID: {message_id})\n\n"
+                                    reply_text += f"📋 主题: {subject}\n"
+                                    reply_text += f"👤 发件人: {sender}\n"
+                                    reply_text += f"📄 内容:{cleaned_content}"
+                                    
+                                    if len(reply_text) > 2000:
+                                        reply_text = reply_text[:1900] + "\n... (内容过长，已截断)"
+                                    
+                                    yield event.plain_result(reply_text)
+                                else:
+                                    yield event.plain_result(f"❌ 获取邮件详情失败，请检查邮件ID: {message_id}")
+                                    
+                            except json.JSONDecodeError as e:
+                                logger.error(f"临时邮箱插件：邮件详情API返回JSON格式无效: {e}")
+                                yield event.plain_result("❌ 获取邮件详情失败，API响应格式错误。")
+                        else:
                             response_text = await response.text()
-                            
-                            data = json.loads(response_text)
-                            result = data.get("result", {})
-                            
-                            if result:
-                                # 确保result是字典类型
-                                if not isinstance(result, dict):
-                                    yield event.plain_result(f"? 邮件详情格式错误")
-                                    return
-                                
-                                sender = result.get("from", "未知发件人")
-                                subject = result.get("subject", "无主题")
-                                content = result.get("content", "无内容")
-                                
-                                cleaned_content = self._clean_email_content(content)
-                                
-                                reply_text = f"?? 邮件详情 (ID: {message_id})\n\n"
-                                reply_text += f"?? 主题: {subject}\n"
-                                reply_text += f"?? 发件人: {sender}\n"
-                                reply_text += f"?? 内容:{cleaned_content}"
-                                
-                                if len(reply_text) > 2000:
-                                    reply_text = reply_text[:1900] + "\n... (内容过长，已截断)"
-                                
-                                yield event.plain_result(reply_text)
-                            else:
-                                yield event.plain_result(f"? 获取邮件详情失败，请检查邮件ID: {message_id}")
-                                
-                        except json.JSONDecodeError as e:
-                            logger.error(f"临时邮箱插件：邮件详情API返回JSON格式无效: {e}")
-                            yield event.plain_result("? 获取邮件详情失败，API响应格式错误。")
-                    else:
-                        response_text = await response.text()
-                        logger.error(f"临时邮箱插件：获取邮件详情网络请求失败，状态码: {response.status}")
-                        yield event.plain_result(f"? 网络请求失败，状态码: {response.status}")
+                            logger.error(f"临时邮箱插件：获取邮件详情网络请求失败，状态码: {response.status}")
+                            yield event.plain_result(f"❌ 网络请求失败，状态码: {response.status}")
                         
             except Exception as e:
                 logger.error(f"临时邮箱插件：获取邮件详情时发生错误: {e}")
-                yield event.plain_result(f"? 获取邮件详情时发生错误: {e}")
+                yield event.plain_result(f"❌ 获取邮件详情时发生错误: {e}")
 
     
 
@@ -371,21 +386,36 @@ class TempEmailPlugin(Star):
     @filter.command("邮箱帮助")
     async def show_help(self, event: AstrMessageEvent):
         """显示插件帮助信息"""
-        help_text = """?? 临时邮箱插件帮助
+        if not self.is_configured:
+            help_text = """📧 临时邮箱插件帮助
 
-?? 获取邮箱 - 生成一个临时邮箱地址
-?? 邮箱列表 - 查看当前邮箱的邮件列表
-?? 查看正文 - 自动查看最新邮件内容（无需输入邮件ID）
-?? 查看正文 <邮件ID> - 查看指定邮件详情
-?? 邮箱帮助 - 显示此帮助信息
+❌ 插件未配置API密钥
 
-?? 简化使用流程：
+请联系管理员在插件配置中设置 api_key 后重载插件。
+
+配置步骤：
+1. 在AstrBot管理面板中找到临时邮箱插件
+2. 点击"管理"按钮
+3. 在配置页面中设置API密钥
+4. 保存配置并重载插件
+
+💡 获取API密钥请访问相关临时邮箱服务提供商"""
+        else:
+            help_text = """📧 临时邮箱插件帮助
+
+🔸 获取邮箱 - 生成一个临时邮箱地址
+🔸 邮箱列表 - 查看当前邮箱的邮件列表
+🔸 查看正文 - 自动查看最新邮件内容（无需输入邮件ID）
+🔸 查看正文 <邮件ID> - 查看指定邮件详情
+🔸 邮箱帮助 - 显示此帮助信息
+
+📝 简化使用流程：
 1. 使用 获取邮箱 生成临时邮箱
 2. 复制邮箱地址用于注册或接收邮件
 3. 使用 邮箱列表 快速查看邮件
 4. 直接输入 查看正文 即可查看最新邮件内容
 
-?? 如有问题，请联系管理员检查API配置"""
+💡 如有问题，请联系管理员检查API配置"""
         
         yield event.plain_result(help_text)
 
